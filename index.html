@@ -49,7 +49,7 @@
         // --- 預設資料結構 ---
         const DEFAULT_MEMBER = {
             name: '',
-            preferred_session: '皆可',
+            preferred_session: '第一堂',
             availability_status: '穩定服事',
             dual_service_pref: 0, // 0: 無, 1: 同崗位, 2: 不同崗位
             group_id: '',
@@ -123,8 +123,21 @@
             };
 
             const openEditModal = (member) => {
+                // 強化防呆：確保從資料庫讀取出來的日期絕對是「陣列」格式
+                let safeDates = [];
+                if (Array.isArray(member.unavailable_dates)) {
+                    safeDates = member.unavailable_dates;
+                } else if (typeof member.unavailable_dates === 'string') {
+                    try { 
+                        const parsed = JSON.parse(member.unavailable_dates); 
+                        safeDates = Array.isArray(parsed) ? parsed : [member.unavailable_dates];
+                    } catch(err) { 
+                        safeDates = member.unavailable_dates ? [member.unavailable_dates] : []; 
+                    }
+                }
+
                 setEditingMember(member);
-                setFormData({ ...member, unavailable_dates: member.unavailable_dates || [] });
+                setFormData({ ...member, unavailable_dates: safeDates });
                 
                 // 找出該同工擁有的崗位 ID 與排班狀態
                 const posMap = {};
@@ -147,14 +160,52 @@
             };
 
             // 處理請假日期
-            const addUnavailableDate = () => {
-                if (newDateInput && !formData.unavailable_dates.includes(newDateInput)) {
-                    setFormData({ ...formData, unavailable_dates: [...formData.unavailable_dates, newDateInput].sort() });
+            const addUnavailableDate = (e) => {
+                if (e) e.preventDefault(); // 防止按鈕觸發其他預設行為
+                
+                if (!newDateInput) {
+                    showMessage('error', '請先選擇一個日期！');
+                    return;
+                }
+
+                // 強化防呆：確保 dates 絕對是個陣列，無論資料庫傳回來什麼格式
+                let currentDates = [];
+                if (Array.isArray(formData.unavailable_dates)) {
+                    currentDates = formData.unavailable_dates;
+                } else if (typeof formData.unavailable_dates === 'string') {
+                    try { 
+                        const parsed = JSON.parse(formData.unavailable_dates); 
+                        currentDates = Array.isArray(parsed) ? parsed : [formData.unavailable_dates];
+                    } catch(err) { 
+                        currentDates = formData.unavailable_dates ? [formData.unavailable_dates] : []; 
+                    }
+                }
+
+                if (!currentDates.includes(newDateInput)) {
+                    setFormData({ 
+                        ...formData, 
+                        unavailable_dates: [...currentDates, newDateInput].sort() 
+                    });
+                    setNewDateInput(''); // 成功加入後清空輸入框
+                } else {
+                    showMessage('error', '這個日期已經加入囉！');
                     setNewDateInput('');
                 }
             };
+            
             const removeUnavailableDate = (dateToRemove) => {
-                setFormData({ ...formData, unavailable_dates: formData.unavailable_dates.filter(d => d !== dateToRemove) });
+                let currentDates = [];
+                if (Array.isArray(formData.unavailable_dates)) {
+                    currentDates = formData.unavailable_dates;
+                } else if (typeof formData.unavailable_dates === 'string') {
+                    try { 
+                        const parsed = JSON.parse(formData.unavailable_dates); 
+                        currentDates = Array.isArray(parsed) ? parsed : [formData.unavailable_dates];
+                    } catch(err) { 
+                        currentDates = formData.unavailable_dates ? [formData.unavailable_dates] : []; 
+                    }
+                }
+                setFormData({ ...formData, unavailable_dates: currentDates.filter(d => d !== dateToRemove) });
             };
 
             // 處理崗位切換 (三段式：未選 -> 正常 -> 暫停 -> 未選)
@@ -188,7 +239,7 @@
                         availability_status: formData.availability_status,
                         dual_service_pref: parseInt(formData.dual_service_pref),
                         group_id: finalGroupId,
-                        unavailable_dates: formData.unavailable_dates || []
+                        unavailable_dates: formData.unavailable_dates && formData.unavailable_dates.length > 0 ? formData.unavailable_dates : null
                     };
 
                     if (memberId) {
@@ -216,7 +267,7 @@
                         if (posKeys.length > 0) {
                             const insertPosPayload = posKeys.map(pid => ({ 
                                 member_id: memberId, 
-                                position_id: pid, // 🌟 已經移除 parseInt()，直接傳入 uuid 字串
+                                position_id: pid, // 已經移除 parseInt()，直接傳入 uuid 字串
                                 is_active: formPositions[pid] === 'active'
                             }));
                             const { error: insErr } = await supabase.from('member_positions').insert(insertPosPayload);
@@ -229,7 +280,6 @@
                     loadData(); // 重新整理列表
                 } catch (err) {
                     console.error("儲存發生錯誤:", err);
-                    // 確保錯誤訊息能被使用者看見
                     showMessage('error', `儲存失敗：${err.message || '請檢查權限設定'}`);
                 } finally {
                     setIsLoading(false);
@@ -501,6 +551,7 @@
                                                 className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 transition-all font-semibold text-slate-700"
                                             />
                                             <button 
+                                                type="button"
                                                 onClick={addUnavailableDate} 
                                                 className="bg-orange-100 hover:bg-orange-200 text-orange-700 font-bold px-4 py-2.5 rounded-xl transition-colors active:scale-95"
                                             >
@@ -509,11 +560,12 @@
                                         </div>
                                         
                                         <div className="flex flex-wrap gap-2">
-                                            {formData.unavailable_dates.length === 0 && <span className="text-sm text-slate-400">目前無請假紀錄。</span>}
-                                            {formData.unavailable_dates.map(date => (
+                                            {(!formData.unavailable_dates || formData.unavailable_dates.length === 0) && <span className="text-sm text-slate-400">目前無請假紀錄。</span>}
+                                            {Array.isArray(formData.unavailable_dates) && formData.unavailable_dates.map(date => (
                                                 <div key={date} className="bg-white border border-orange-200 text-orange-600 pl-3 pr-1 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm">
                                                     {date}
                                                     <button 
+                                                        type="button"
                                                         onClick={() => removeUnavailableDate(date)} 
                                                         className="p-1 hover:bg-orange-100 rounded-md text-orange-400 hover:text-orange-700 transition-colors"
                                                     >
