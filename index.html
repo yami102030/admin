@@ -171,7 +171,7 @@
 
             // 3. 儲存至資料庫 (新增或更新)
             const handleSave = async () => {
-                if (!formData.name.trim()) return showMessage('error', '姓名不可為空！');
+                if (!formData.name || !formData.name.trim()) return showMessage('error', '姓名不可為空！');
                 
                 setIsLoading(true);
                 try {
@@ -183,8 +183,8 @@
                         preferred_session: formData.preferred_session,
                         availability_status: formData.availability_status,
                         dual_service_pref: parseInt(formData.dual_service_pref),
-                        group_id: formData.group_id.trim().toUpperCase(),
-                        unavailable_dates: formData.unavailable_dates
+                        group_id: (formData.group_id || '').trim().toUpperCase(), // 加入 || '' 防止 null 報錯
+                        unavailable_dates: formData.unavailable_dates || []
                     };
 
                     if (memberId) {
@@ -201,7 +201,8 @@
                     // 步驟 B: 處理 member_positions 關聯表 (全刪除後重建)
                     if (memberId) {
                         const { error: delErr } = await supabase.from('member_positions').delete().eq('member_id', memberId);
-                        if (delErr && delErr.code !== 'PGRST116') console.warn('Delete old positions issue:', delErr);
+                        // 如果因為 RLS 權限失敗，直接拋出錯誤，避免後續重複 Insert 導致無效儲存
+                        if (delErr) throw delErr;
 
                         const posKeys = Object.keys(formPositions);
                         if (posKeys.length > 0) {
@@ -219,8 +220,8 @@
                     closeModal();
                     loadData(); // 重新整理列表
                 } catch (err) {
-                    console.error(err);
-                    showMessage('error', '儲存失敗，請檢查權限或網路連線。');
+                    console.error("儲存發生錯誤:", err);
+                    showMessage('error', '儲存失敗，請檢查 Supabase 的 Update/Delete 權限。');
                 } finally {
                     setIsLoading(false);
                 }
