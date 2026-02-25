@@ -177,13 +177,17 @@
                 try {
                     let memberId = editingMember ? editingMember.id : null;
 
+                    // 處理群組 ID：如果是空白，必須轉成 null，否則會觸發 Foreign Key 錯誤
+                    const cleanedGroupId = (formData.group_id || '').trim().toUpperCase();
+                    const finalGroupId = cleanedGroupId === '' ? null : cleanedGroupId;
+
                     // 步驟 A: 處理 members 表
                     const memberPayload = {
                         name: formData.name.trim(),
                         preferred_session: formData.preferred_session,
                         availability_status: formData.availability_status,
                         dual_service_pref: parseInt(formData.dual_service_pref),
-                        group_id: (formData.group_id || '').trim().toUpperCase(), // 加入 || '' 防止 null 報錯
+                        group_id: finalGroupId,
                         unavailable_dates: formData.unavailable_dates || []
                     };
 
@@ -195,20 +199,24 @@
                         // 新增
                         const { data, error } = await supabase.from('members').insert(memberPayload).select();
                         if (error) throw error;
+                        
+                        // 防護：如果 RLS 有問題可能拿不到回傳的 data
+                        if (!data || data.length === 0) {
+                            throw new Error("無法取得新增的資料，請檢查 Supabase 的 Select 權限");
+                        }
                         memberId = data[0].id;
                     }
 
                     // 步驟 B: 處理 member_positions 關聯表 (全刪除後重建)
                     if (memberId) {
                         const { error: delErr } = await supabase.from('member_positions').delete().eq('member_id', memberId);
-                        // 如果因為 RLS 權限失敗，直接拋出錯誤，避免後續重複 Insert 導致無效儲存
-                        if (delErr) throw delErr;
+                        if (delErr && delErr.code !== 'PGRST116') console.warn('Delete old positions issue:', delErr);
 
                         const posKeys = Object.keys(formPositions);
                         if (posKeys.length > 0) {
                             const insertPosPayload = posKeys.map(pid => ({ 
                                 member_id: memberId, 
-                                position_id: parseInt(pid),
+                                position_id: pid, // 🌟 已經移除 parseInt()，直接傳入 uuid 字串
                                 is_active: formPositions[pid] === 'active'
                             }));
                             const { error: insErr } = await supabase.from('member_positions').insert(insertPosPayload);
@@ -221,7 +229,8 @@
                     loadData(); // 重新整理列表
                 } catch (err) {
                     console.error("儲存發生錯誤:", err);
-                    showMessage('error', '儲存失敗，請檢查 Supabase 的 Update/Delete 權限。');
+                    // 確保錯誤訊息能被使用者看見
+                    showMessage('error', `儲存失敗：${err.message || '請檢查權限設定'}`);
                 } finally {
                     setIsLoading(false);
                 }
@@ -268,9 +277,9 @@
                         </button>
                     </nav>
 
-                    {/* 提示訊息 */}
+                    {/* 提示訊息 (修正 z-index 為 z-[60] 確保顯示在 Modal 之上) */}
                     {message.text && (
-                        <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-full font-bold shadow-lg animate-fade-in flex items-center gap-2 ${message.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
+                        <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[60] px-6 py-3 rounded-full font-bold shadow-lg animate-fade-in flex items-center gap-2 ${message.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
                             {message.type === 'success' ? <CheckCircle2 size={18}/> : <AlertCircle size={18}/>}
                             {message.text}
                         </div>
