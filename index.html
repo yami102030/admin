@@ -38,7 +38,7 @@
         import { 
             Users, UserPlus, Search, Edit2, Trash2, Save, X, AlertCircle, 
             CheckCircle2, Clock, CalendarX, ShieldCheck, ChevronRight,
-            Pin, Ban, Heart // 新增 Heart Icon
+            Pin, Ban, Heart, Copy
         } from 'lucide-react';
         import { createClient } from '@supabase/supabase-js';
 
@@ -52,71 +52,223 @@
             name: '',
             preferred_session: '第一堂',
             availability_status: '穩定服事',
-            dual_service_pref: 0, // 0: 無, 1: 同崗位, 2: 不同崗位
+            dual_service_pref: 0, 
             group_id: '',
-            unavailable_dates: [], // array of strings (YYYY-MM-DD)
-            newcomer_rule: '' // 預設為空 (正常)
+            unavailable_dates: [], 
+            newcomer_rule: '' 
         };
 
         const SESSION_OPTIONS = ['第一堂', '第二堂', '皆可'];
         const STATUS_OPTIONS = ['穩定服事', '暫停服事', '安息季'];
 
+        // --- 自動產生基礎季度清單 ---
+        const generateBaseQuarters = () => {
+            const d = new Date();
+            const currentYear = d.getFullYear();
+            const currentQ = Math.floor(d.getMonth() / 3) + 1;
+            const quarters = [];
+            // 修正：產生「本季」與「下二季」(共3季)
+            for (let offset = 0; offset <= 2; offset++) {
+                let q = currentQ + offset;
+                let y = currentYear;
+                if (q > 4) { q -= 4; y += 1; }
+                quarters.push(`${y}-Q${q}`);
+            }
+            return quarters;
+        };
+
+        // --- 計算下一季 ---
+        const getNextQuarter = (qStr) => {
+            let [y, q] = qStr.split('-Q').map(Number);
+            if (q === 4) return `${y + 1}-Q1`;
+            return `${y}-Q${q + 1}`;
+        };
+
+        const getCurrentQuarter = () => {
+            const d = new Date();
+            return `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
+        };
+
         function App() {
+            const [quarterOptions, setQuarterOptions] = useState(generateBaseQuarters());
+            const [viewQuarter, setViewQuarter] = useState(getCurrentQuarter()); 
+            
             const [members, setMembers] = useState([]);
             const [positions, setPositions] = useState([]);
             const [memberPositions, setMemberPositions] = useState([]);
+            const [quarterSettings, setQuarterSettings] = useState([]);
             
             const [isLoading, setIsLoading] = useState(true);
             const [searchTerm, setSearchTerm] = useState('');
             const [message, setMessage] = useState({ type: '', text: '' });
+            const [confirmAction, setConfirmAction] = useState(null);
 
-            // 取得目前已存在的所有不重複群組 ID
+            // 刪除季度用的狀態
+            const [isDeleteQuarterModalOpen, setIsDeleteQuarterModalOpen] = useState(false);
+            const [detectedQuarters, setDetectedQuarters] = useState([]);
+            const [quarterToDelete, setQuarterToDelete] = useState('');
+
             const existingGroupIds = [...new Set(members.map(m => m.group_id).filter(Boolean))].sort();
 
-            // Modal 狀態
             const [isModalOpen, setIsModalOpen] = useState(false);
-            const [editingMember, setEditingMember] = useState(null); // null 表示新增
+            const [editingMember, setEditingMember] = useState(null); 
             const [formData, setFormData] = useState({ ...DEFAULT_MEMBER });
-            const [formPositions, setFormPositions] = useState({}); // { [posId]: 'active' | 'inactive' }
+            const [formPositions, setFormPositions] = useState({}); 
             const [newDateInput, setNewDateInput] = useState('');
 
-            // 1. 載入資料庫
             const loadData = async () => {
                 setIsLoading(true);
                 try {
+                    // 同時抓取所有設定中的季度，確保選單永遠包含資料庫裡有的季度
+                    const { data: allSettingsQs } = await supabase.from('member_quarter_settings').select('quarter');
+                    
                     const [
-                        { data: membersData, error: mErr },
-                        { data: positionsData, error: pErr },
-                        { data: memberPosData, error: mpErr }
+                        { data: mData },
+                        { data: pData },
+                        { data: mpData },
+                        { data: qsData }
                     ] = await Promise.all([
                         supabase.from('members').select('*').order('name'),
                         supabase.from('positions').select('*').order('id'),
-                        supabase.from('member_positions').select('*')
+                        supabase.from('member_positions').select('*').eq('quarter', viewQuarter),
+                        supabase.from('member_quarter_settings').select('*').eq('quarter', viewQuarter)
                     ]);
 
-                    if (mErr) throw mErr;
-                    if (pErr) throw pErr;
-                    if (mpErr) throw mpErr;
+                    setMembers(mData || []);
+                    setPositions(pData || []);
+                    setMemberPositions(mpData || []);
+                    setQuarterSettings(qsData || []);
 
-                    setMembers(membersData || []);
-                    setPositions(positionsData || []);
-                    setMemberPositions(memberPosData || []);
+                    // 動態更新季度選單
+                    if (allSettingsQs) {
+                        const dbQuarters = allSettingsQs.map(d => d.quarter);
+                        // 修正：移除 reverse() 讓選單照時間先後(本季 -> 下季 -> 下二季)排序
+                        const combinedQs = [...new Set([...generateBaseQuarters(), ...dbQuarters, viewQuarter])].sort();
+                        setQuarterOptions(combinedQs);
+                    }
                 } catch (err) {
-                    console.error(err);
-                    showMessage('error', '載入資料失敗，請確認連線或無資料表。');
+                    showMessage('error', '載入資料失敗，請確認連線。');
                 } finally {
                     setIsLoading(false);
                 }
             };
 
-            useEffect(() => { loadData(); }, []);
+            useEffect(() => { loadData(); }, [viewQuarter]);
 
             const showMessage = (type, text) => {
                 setMessage({ type, text });
-                setTimeout(() => setMessage({ type: '', text: '' }), 3000);
+                setTimeout(() => setMessage({ type: '', text: '' }), 4000);
             };
 
-            // 2. 表單處理 (開啟新增/編輯)
+            // 🌟 1. 建立下季同工資料 (複製目前 -> 下一季)
+            const triggerCreateNextQuarter = () => {
+                const targetQ = getNextQuarter(viewQuarter);
+                setConfirmAction({
+                    title: '建立同工資料',
+                    message: `自動複製【${viewQuarter}】的同工資料，建立為【${targetQ}】的資料`,
+                    confirmText: '複製',
+                    onConfirm: () => executeCreateNextQuarter(viewQuarter, targetQ)
+                });
+            };
+
+            const executeCreateNextQuarter = async (sourceQ, targetQ) => {
+                setConfirmAction(null);
+                setIsLoading(true);
+                try {
+                    const { data: oldSettings, error: err1 } = await supabase.from('member_quarter_settings').select('*').eq('quarter', sourceQ);
+                    const { data: oldPos, error: err2 } = await supabase.from('member_positions').select('*').eq('quarter', sourceQ);
+
+                    if (err1) throw err1;
+                    if (err2) throw err2;
+
+                    if ((!oldSettings || oldSettings.length === 0) && (!oldPos || oldPos.length === 0)) {
+                        throw new Error(`【${sourceQ}】目前沒有任何資料可供複製！`);
+                    }
+
+                    // 複製前先清空目標季度，避免衝突
+                    await supabase.from('member_quarter_settings').delete().eq('quarter', targetQ);
+                    await supabase.from('member_positions').delete().eq('quarter', targetQ);
+
+                    if (oldSettings && oldSettings.length > 0) {
+                        const newSettings = oldSettings.map(s => ({
+                            member_id: s.member_id,
+                            preferred_session: s.preferred_session,
+                            availability_status: s.availability_status,
+                            dual_service_pref: s.dual_service_pref,
+                            newcomer_rule: s.newcomer_rule,
+                            unavailable_dates: s.unavailable_dates,
+                            quarter: targetQ
+                        }));
+                        const { error: insErr1 } = await supabase.from('member_quarter_settings').insert(newSettings);
+                        if (insErr1) throw insErr1;
+                    }
+
+                    if (oldPos && oldPos.length > 0) {
+                        const newPos = oldPos.map(p => ({
+                            member_id: p.member_id,
+                            position_id: p.position_id,
+                            is_active: p.is_active,
+                            quarter: targetQ
+                        }));
+                        const { error: insErr2 } = await supabase.from('member_positions').insert(newPos);
+                        if (insErr2) throw insErr2;
+                    }
+                    
+                    showMessage('success', `已成功建立 ${targetQ} 資料！`);
+                    setViewQuarter(targetQ); // 自動切換畫面到剛剛建立好的下一季
+                } catch (err) {
+                    showMessage('error', '建立失敗: ' + err.message);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            // 🌟 2. 刪除特定季度資料
+            const openDeleteQuarterModal = async () => {
+                setIsLoading(true);
+                try {
+                    // 自動偵測資料庫中存在哪些季度
+                    const { data: allSettingsQs } = await supabase.from('member_quarter_settings').select('quarter');
+                    const { data: allPosQs } = await supabase.from('member_positions').select('quarter');
+                    
+                    const combined = [...(allSettingsQs || []), ...(allPosQs || [])].map(d => d.quarter);
+                    const uniqueQs = [...new Set(combined)].sort().reverse();
+                    
+                    setDetectedQuarters(uniqueQs);
+                    if (uniqueQs.length > 0) {
+                        setQuarterToDelete(uniqueQs[0]);
+                    } else {
+                        setQuarterToDelete('');
+                    }
+                    setIsDeleteQuarterModalOpen(true);
+                } catch (err) {
+                    showMessage('error', '無法載入現有季度清單');
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            const executeDeleteQuarter = async () => {
+                if (!quarterToDelete) return;
+                setIsLoading(true);
+                try {
+                    await supabase.from('member_quarter_settings').delete().eq('quarter', quarterToDelete);
+                    await supabase.from('member_positions').delete().eq('quarter', quarterToDelete);
+                    
+                    showMessage('success', `已徹底刪除 ${quarterToDelete} 的所有資料！`);
+                    setIsDeleteQuarterModalOpen(false);
+                    
+                    if (viewQuarter === quarterToDelete) {
+                        loadData(); // 如果刪除的是當前畫面，重新載入讓畫面清空
+                    }
+                } catch (err) {
+                    showMessage('error', '刪除失敗: ' + err.message);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            // --- 同工資料 Modal 處理 ---
             const openAddModal = () => {
                 setEditingMember(null);
                 setFormData({ ...DEFAULT_MEMBER });
@@ -125,32 +277,34 @@
             };
 
             const openEditModal = (member) => {
-                // 強化防呆：確保從資料庫讀取出來的日期絕對是「陣列」格式
+                const settings = quarterSettings.find(s => s.member_id === member.id) || DEFAULT_MEMBER;
+                
                 let safeDates = [];
-                if (Array.isArray(member.unavailable_dates)) {
-                    safeDates = member.unavailable_dates;
-                } else if (typeof member.unavailable_dates === 'string') {
+                if (Array.isArray(settings.unavailable_dates)) {
+                    safeDates = settings.unavailable_dates;
+                } else if (typeof settings.unavailable_dates === 'string') {
                     try { 
-                        const parsed = JSON.parse(member.unavailable_dates); 
-                        safeDates = Array.isArray(parsed) ? parsed : [member.unavailable_dates];
+                        const parsed = JSON.parse(settings.unavailable_dates); 
+                        safeDates = Array.isArray(parsed) ? parsed : [settings.unavailable_dates];
                     } catch(err) { 
-                        safeDates = member.unavailable_dates ? [member.unavailable_dates] : []; 
+                        safeDates = settings.unavailable_dates ? [settings.unavailable_dates] : []; 
                     }
                 }
 
                 setEditingMember(member);
                 setFormData({ 
                     ...member, 
+                    preferred_session: settings.preferred_session,
+                    availability_status: settings.availability_status,
+                    dual_service_pref: settings.dual_service_pref || 0,
                     unavailable_dates: safeDates,
-                    newcomer_rule: member.newcomer_rule === null ? '' : member.newcomer_rule
+                    newcomer_rule: settings.newcomer_rule === null ? '' : settings.newcomer_rule
                 });
                 
-                // 找出該同工擁有的崗位 ID 與排班狀態
                 const posMap = {};
                 memberPositions
                     .filter(mp => mp.member_id === member.id)
                     .forEach(mp => {
-                        // 如果舊資料沒有 is_active 欄位，預設視為 active
                         posMap[mp.position_id] = mp.is_active !== false ? 'active' : 'inactive';
                     });
                 setFormPositions(posMap);
@@ -165,32 +319,13 @@
                 setNewDateInput('');
             };
 
-            // 處理請假日期
             const addUnavailableDate = (e) => {
                 if (e) e.preventDefault();
-                
-                if (!newDateInput) {
-                    showMessage('error', '請先選擇一個日期！');
-                    return;
-                }
+                if (!newDateInput) return showMessage('error', '請先選擇一個日期！');
 
-                let currentDates = [];
-                if (Array.isArray(formData.unavailable_dates)) {
-                    currentDates = formData.unavailable_dates;
-                } else if (typeof formData.unavailable_dates === 'string') {
-                    try { 
-                        const parsed = JSON.parse(formData.unavailable_dates); 
-                        currentDates = Array.isArray(parsed) ? parsed : [formData.unavailable_dates];
-                    } catch(err) { 
-                        currentDates = formData.unavailable_dates ? [formData.unavailable_dates] : []; 
-                    }
-                }
-
+                let currentDates = Array.isArray(formData.unavailable_dates) ? formData.unavailable_dates : [];
                 if (!currentDates.includes(newDateInput)) {
-                    setFormData({ 
-                        ...formData, 
-                        unavailable_dates: [...currentDates, newDateInput].sort() 
-                    });
+                    setFormData({ ...formData, unavailable_dates: [...currentDates, newDateInput].sort() });
                     setNewDateInput(''); 
                 } else {
                     showMessage('error', '這個日期已經加入囉！');
@@ -199,17 +334,7 @@
             };
             
             const removeUnavailableDate = (dateToRemove) => {
-                let currentDates = [];
-                if (Array.isArray(formData.unavailable_dates)) {
-                    currentDates = formData.unavailable_dates;
-                } else if (typeof formData.unavailable_dates === 'string') {
-                    try { 
-                        const parsed = JSON.parse(formData.unavailable_dates); 
-                        currentDates = Array.isArray(parsed) ? parsed : [formData.unavailable_dates];
-                    } catch(err) { 
-                        currentDates = formData.unavailable_dates ? [formData.unavailable_dates] : []; 
-                    }
-                }
+                let currentDates = Array.isArray(formData.unavailable_dates) ? formData.unavailable_dates : [];
                 setFormData({ ...formData, unavailable_dates: currentDates.filter(d => d !== dateToRemove) });
             };
 
@@ -224,58 +349,53 @@
                 });
             };
 
-            // 3. 儲存至資料庫
             const handleSave = async () => {
                 if (!formData.name || !formData.name.trim()) return showMessage('error', '姓名不可為空！');
                 
                 setIsLoading(true);
                 try {
                     let memberId = editingMember ? editingMember.id : null;
-
                     const cleanedGroupId = (formData.group_id || '').trim().toUpperCase();
                     const finalGroupId = cleanedGroupId === '' ? null : cleanedGroupId;
-
-                    // 處理 newcomer_rule，將字串空值轉回 null
                     const parsedNewcomerRule = formData.newcomer_rule === '' ? null : parseInt(formData.newcomer_rule);
 
-                    // 步驟 A: 處理 members 表
+                    // 1. 寫入全域資料表 (members)
                     const memberPayload = {
                         name: formData.name.trim(),
-                        preferred_session: formData.preferred_session,
-                        availability_status: formData.availability_status,
-                        dual_service_pref: parseInt(formData.dual_service_pref),
-                        group_id: finalGroupId,
-                        unavailable_dates: formData.unavailable_dates && formData.unavailable_dates.length > 0 ? formData.unavailable_dates : null,
-                        newcomer_rule: parsedNewcomerRule
+                        group_id: finalGroupId
                     };
 
                     if (memberId) {
-                        const { error } = await supabase.from('members').update(memberPayload).eq('id', memberId);
-                        if (error) throw error;
+                        await supabase.from('members').update(memberPayload).eq('id', memberId);
                     } else {
                         const { data, error } = await supabase.from('members').insert(memberPayload).select();
                         if (error) throw error;
-                        
-                        if (!data || data.length === 0) {
-                            throw new Error("無法取得新增的資料，請檢查 Supabase 的 Select 權限");
-                        }
                         memberId = data[0].id;
                     }
 
-                    // 步驟 B: 處理 member_positions 關聯表
-                    if (memberId) {
-                        const { error: delErr } = await supabase.from('member_positions').delete().eq('member_id', memberId);
-                        if (delErr && delErr.code !== 'PGRST116') console.warn('Delete old positions issue:', delErr);
+                    // 2. 寫入季度設定表 (member_quarter_settings)
+                    await supabase.from('member_quarter_settings').upsert({
+                        member_id: memberId,
+                        quarter: viewQuarter,
+                        preferred_session: formData.preferred_session,
+                        availability_status: formData.availability_status,
+                        dual_service_pref: parseInt(formData.dual_service_pref),
+                        newcomer_rule: parsedNewcomerRule,
+                        unavailable_dates: formData.unavailable_dates
+                    }, { onConflict: 'member_id, quarter' });
 
+                    // 3. 寫入季度崗位表 (member_positions)
+                    if (memberId) {
+                        await supabase.from('member_positions').delete().eq('member_id', memberId).eq('quarter', viewQuarter);
                         const posKeys = Object.keys(formPositions);
                         if (posKeys.length > 0) {
                             const insertPosPayload = posKeys.map(pid => ({ 
                                 member_id: memberId, 
                                 position_id: pid,
+                                quarter: viewQuarter,
                                 is_active: formPositions[pid] === 'active'
                             }));
-                            const { error: insErr } = await supabase.from('member_positions').insert(insertPosPayload);
-                            if (insErr) throw insErr;
+                            await supabase.from('member_positions').insert(insertPosPayload);
                         }
                     }
 
@@ -283,62 +403,56 @@
                     closeModal();
                     loadData();
                 } catch (err) {
-                    console.error("儲存發生錯誤:", err);
-                    showMessage('error', `儲存失敗：${err.message || '請檢查權限設定'}`);
+                    showMessage('error', `儲存失敗：${err.message}`);
                 } finally {
                     setIsLoading(false);
                 }
             };
 
             const handleDelete = async (id, name) => {
-                if (!window.confirm(`確定要刪除同工「${name}」嗎？\n注意：這會連帶刪除他所有的排班紀錄！`)) return;
-                
-                setIsLoading(true);
-                try {
-                    const { error } = await supabase.from('members').delete().eq('id', id);
-                    if (error) throw error;
-                    showMessage('success', '已刪除同工資料。');
-                    loadData();
-                } catch (err) {
-                    console.error(err);
-                    showMessage('error', '刪除失敗，請檢查權限。');
-                } finally {
-                    setIsLoading(false);
-                }
+                setConfirmAction({
+                    title: '刪除同工',
+                    message: `確定要刪除同工「${name}」嗎？\n注意：這會連帶永久刪除他「所有季度」的紀錄！`,
+                    confirmText: '刪除',
+                    onConfirm: async () => {
+                        setConfirmAction(null);
+                        setIsLoading(true);
+                        try {
+                            await supabase.from('members').delete().eq('id', id);
+                            showMessage('success', '已刪除同工資料。');
+                            loadData();
+                        } catch (err) {
+                            showMessage('error', '刪除失敗，請檢查權限。');
+                        } finally {
+                            setIsLoading(false);
+                        }
+                    }
+                });
             };
 
-            // 過濾搜尋
             let filteredMembers = members.filter(m => {
                 const term = searchTerm.toLowerCase();
-                
-                // 1. 比對姓名
                 if (m.name.toLowerCase().includes(term)) return true;
-                
-                // 2. 比對群組
                 if (m.group_id && m.group_id.toLowerCase().includes(term)) return true;
-                
-                // 3. 比對服事崗位
                 const hasMatchingPosition = memberPositions
                     .filter(mp => mp.member_id === m.id)
                     .some(mp => {
                         const p = positions.find(pos => pos.id === mp.position_id);
                         return p && p.name.toLowerCase().includes(term);
                     });
-                    
                 if (hasMatchingPosition) return true;
-                
                 return false;
             });
 
-            // 🌟 排序邏輯：群組 -> 置頂規則(1, 3) -> 姓名
             filteredMembers.sort((a, b) => {
-                const groupA = a.group_id || 'ZZZ_NO_GROUP'; // 讓沒群組的排在最後
+                const groupA = a.group_id || 'ZZZ_NO_GROUP'; 
                 const groupB = b.group_id || 'ZZZ_NO_GROUP';
-                
                 if (groupA !== groupB) return groupA.localeCompare(groupB);
                 
-                const isTopA = (a.newcomer_rule === 1 || a.newcomer_rule === 3) ? -1 : 1;
-                const isTopB = (b.newcomer_rule === 1 || b.newcomer_rule === 3) ? -1 : 1;
+                const setA = quarterSettings.find(s => s.member_id === a.id) || {};
+                const setB = quarterSettings.find(s => s.member_id === b.id) || {};
+                const isTopA = (setA.newcomer_rule === 1 || setA.newcomer_rule === 3) ? -1 : 1;
+                const isTopB = (setB.newcomer_rule === 1 || setB.newcomer_rule === 3) ? -1 : 1;
                 if (isTopA !== isTopB) return isTopA - isTopB;
                 
                 return a.name.localeCompare(b.name);
@@ -346,24 +460,111 @@
 
             return (
                 <div className="min-h-screen bg-slate-50 flex flex-col">
-                    <nav className="bg-white sticky top-0 z-40 border-b border-slate-200 px-6 py-4 flex justify-between items-center shadow-sm">
-                        <div className="flex items-center gap-3">
-                            <div className="bg-indigo-600 p-2 rounded-xl text-white">
+                    <nav className="bg-white sticky top-0 z-40 border-b border-slate-200 px-6 py-4 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-sm">
+                        <div className="flex items-center gap-3 w-full sm:w-auto justify-center sm:justify-start">
+                            <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-sm">
                                 <Users size={24} />
                             </div>
-                            <div>
-                                <h1 className="text-xl font-black text-slate-800">TBC Service Manager</h1>
-                            </div>
+                            <h1 className="text-xl font-black text-slate-800">TBC Service Manager</h1>
                         </div>
-                        <button onClick={openAddModal} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-xl flex items-center gap-2 shadow-sm transition-all active:scale-95">
-                            <UserPlus size={18} /> <span className="hidden sm:inline">新增同工</span>
-                        </button>
+                        
+                        <div className="flex items-center flex-wrap justify-center sm:justify-end gap-2 w-full sm:w-auto">
+                            {/* 季度檢視選單 */}
+                            <div className="flex items-center bg-slate-50 rounded-xl p-1.5 border border-slate-200">
+                                <Clock size={16} className="ml-2 text-slate-400"/>
+                                <select 
+                                    value={viewQuarter} 
+                                    onChange={(e) => setViewQuarter(e.target.value)}
+                                    className="bg-transparent border-none px-3 py-1 font-bold text-indigo-600 outline-none cursor-pointer"
+                                    title="切換檢視季度"
+                                >
+                                    {quarterOptions.map(q => <option key={q} value={q}>{q}</option>)}
+                                </select>
+                            </div>
+                            
+                            {/* 建立下季按鈕 */}
+                            <button onClick={triggerCreateNextQuarter} className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 shadow-sm transition-all active:scale-95" title="以目前季度為基礎，複製建立下一季資料">
+                                <Copy size={16} /> <span className="hidden md:inline">複製</span>
+                            </button>
+
+                            {/* 刪除季度按鈕 */}
+                            <button onClick={openDeleteQuarterModal} className="bg-red-50 hover:bg-red-100 text-red-600 font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 shadow-sm transition-all active:scale-95" title="刪除特定季度的資料">
+                                <Trash2 size={16} /> <span className="hidden md:inline">刪除</span>
+                            </button>
+
+                            {/* 新增同工按鈕 */}
+                            <button onClick={openAddModal} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 shadow-sm transition-all active:scale-95 sm:ml-2" title="新增一位同工">
+                                <UserPlus size={16} /> <span className="hidden md:inline">新增同工</span>
+                            </button>
+                        </div>
                     </nav>
 
                     {message.text && (
-                        <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[60] px-6 py-3 rounded-full font-bold shadow-lg animate-fade-in flex items-center gap-2 ${message.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
+                        <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[80] px-6 py-3 rounded-full font-bold shadow-lg animate-fade-in flex items-center gap-2 ${message.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
                             {message.type === 'success' ? <CheckCircle2 size={18}/> : <AlertCircle size={18}/>}
                             {message.text}
+                        </div>
+                    )}
+
+                    {/* 通用確認視窗 */}
+                    {confirmAction && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[70] flex items-center justify-center p-4 animate-fade-in">
+                            <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl flex flex-col overflow-hidden">
+                                <div className="p-8 text-center">
+                                    <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-5 shadow-inner ${confirmAction.title === '刪除同工' ? 'bg-red-100 text-red-500' : 'bg-amber-100 text-amber-500'}`}>
+                                        <AlertCircle size={32} />
+                                    </div>
+                                    <h3 className="text-xl font-black text-slate-800 mb-3">{confirmAction.title}</h3>
+                                    <p className="text-sm font-bold text-slate-500 whitespace-pre-line leading-relaxed">
+                                        {confirmAction.message}
+                                    </p>
+                                </div>
+                                <div className="p-4 bg-slate-50 flex gap-3 border-t border-slate-100">
+                                    <button onClick={() => setConfirmAction(null)} className="flex-1 py-3.5 font-black text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors bg-white border border-slate-200 rounded-xl shadow-sm">
+                                        取消
+                                    </button>
+                                    <button onClick={confirmAction.onConfirm} className={`flex-1 py-3.5 font-black text-white shadow-lg transition-all active:scale-95 rounded-xl ${confirmAction.title === '刪除同工' ? 'bg-red-500 hover:bg-red-600 shadow-red-200' : 'bg-amber-500 hover:bg-amber-600 shadow-amber-200'}`}>
+                                        {confirmAction.confirmText || '確定執行'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 刪除季度專用 Modal */}
+                    {isDeleteQuarterModalOpen && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[70] flex items-center justify-center p-4 animate-fade-in">
+                            <div className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl flex flex-col overflow-hidden">
+                                <div className="p-8 text-center">
+                                    <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-5 shadow-inner bg-red-100 text-red-500">
+                                        <Trash2 size={32} />
+                                    </div>
+                                    <h3 className="text-xl font-black text-slate-800 mb-3">刪除同工資料</h3>
+                                    <p className="text-sm font-bold text-slate-500 mb-6 leading-relaxed">
+                                        請選擇季度，永久刪除，<span className="text-red-500">無法復原！</span>
+                                    </p>
+                                    <select 
+                                        value={quarterToDelete} 
+                                        onChange={(e) => setQuarterToDelete(e.target.value)}
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 font-bold text-slate-700 text-center cursor-pointer"
+                                    >
+                                        {detectedQuarters.length === 0 && <option value="">無資料可刪除</option>}
+                                        {detectedQuarters.map(q => <option key={q} value={q}>{q}</option>)}
+                                    </select>
+                                </div>
+                                <div className="p-4 bg-slate-50 flex gap-3 border-t border-slate-100">
+                                    <button onClick={() => setIsDeleteQuarterModalOpen(false)} className="flex-1 py-3.5 font-black text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors bg-white border border-slate-200 rounded-xl shadow-sm">
+                                        取消
+                                    </button>
+                                    <button 
+                                        onClick={executeDeleteQuarter} 
+                                        disabled={!quarterToDelete || isLoading}
+                                        className="flex-1 py-3.5 font-black text-white bg-red-500 hover:bg-red-600 shadow-lg shadow-red-200 transition-all active:scale-95 rounded-xl disabled:opacity-50"
+                                    >
+                                        刪除
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -384,6 +585,7 @@
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                 {filteredMembers.map(member => {
+                                    const settings = quarterSettings.find(s => s.member_id === member.id) || DEFAULT_MEMBER;
                                     const ownedPosList = memberPositions
                                         .filter(mp => mp.member_id === member.id)
                                         .map(mp => {
@@ -402,9 +604,9 @@
                                                             {member.group_id && <span className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded border border-indigo-100">{member.group_id}</span>}
                                                         </h3>
                                                         <div className="flex items-center flex-wrap gap-1 text-xs font-bold mt-1.5">
-                                                            <span className={member.availability_status === '穩定服事' ? 'text-emerald-500' : 'text-orange-500'}>● {member.availability_status}</span>
+                                                            <span className={settings.availability_status === '穩定服事' ? 'text-emerald-500' : 'text-orange-500'}>● {settings.availability_status}</span>
                                                             <span className="text-slate-300">|</span>
-                                                            <span className="text-slate-500">{member.preferred_session}</span>
+                                                            <span className="text-slate-500">{settings.preferred_session}</span>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -422,12 +624,11 @@
                                                             <span key={p.name} className={`text-[10px] font-bold px-2 py-1 rounded-md border flex items-center gap-1 ${p.isActive ? 'bg-white border-slate-200 text-slate-600 shadow-sm' : 'bg-slate-50 border-slate-200 border-dashed text-slate-400'}`}>
                                                                 {p.name} {!p.isActive && <span className="text-slate-400">(暫停)</span>}
                                                                 
-                                                                {/* 整合新朋友規則標籤 */}
-                                                                {(p.name.includes('新朋友') && member.newcomer_rule > 0) && (
+                                                                {(p.name.includes('新朋友') && settings.newcomer_rule > 0) && (
                                                                     <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100">
-                                                                        {member.newcomer_rule === 1 && "主責"}
-                                                                        {member.newcomer_rule === 2 && "禁排第二週"}
-                                                                        {member.newcomer_rule === 3 && "主責 + 禁排第二週"}
+                                                                        {settings.newcomer_rule === 1 && "主責"}
+                                                                        {settings.newcomer_rule === 2 && "禁排第二週"}
+                                                                        {settings.newcomer_rule === 3 && "主責 + 禁排第二週"}
                                                                     </span>
                                                                 )}
                                                             </span>
@@ -435,11 +636,11 @@
                                                     </div>
                                                 </div>
                                                 
-                                                {(member.unavailable_dates && member.unavailable_dates.length > 0) && (
+                                                {(settings.unavailable_dates && settings.unavailable_dates.length > 0) && (
                                                     <div className="bg-orange-50/50 p-3 rounded-xl border border-orange-100">
-                                                        <p className="text-[10px] font-bold text-orange-400 mb-1 flex items-center gap-1"><CalendarX size={12}/> 請假日期 ({member.unavailable_dates.length})</p>
+                                                        <p className="text-[10px] font-bold text-orange-400 mb-1 flex items-center gap-1"><CalendarX size={12}/> 請假日期 ({settings.unavailable_dates.length})</p>
                                                         <div className="flex flex-wrap gap-1">
-                                                            {member.unavailable_dates.map(d => (
+                                                            {settings.unavailable_dates.map(d => (
                                                                 <span key={d} className="text-[10px] font-bold bg-white text-orange-600 px-1.5 py-0.5 rounded border border-orange-200">{d}</span>
                                                             ))}
                                                         </div>
@@ -463,13 +664,12 @@
                                 <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
                                     <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
                                         {editingMember ? <Edit2 size={20} className="text-indigo-600"/> : <UserPlus size={20} className="text-indigo-600"/>}
-                                        {editingMember ? '編輯同工資料' : '新增同工'}
+                                        {editingMember ? '編輯同工資料' : '新增同工'} <span className="text-sm font-bold text-slate-400 ml-2">({viewQuarter})</span>
                                     </h2>
                                     <button onClick={closeModal} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors"><X size={20}/></button>
                                 </div>
                                 
                                 <div className="p-6 space-y-6 overflow-y-auto">
-                                    {/* 基本資料區塊 */}
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="space-y-2">
                                             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">姓名 <span className="text-red-500">*</span></label>
@@ -498,7 +698,6 @@
                                         </div>
                                     </div>
 
-                                    {/* 意願與狀態區塊 */}
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="space-y-2">
                                             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">服事意願</label>
@@ -528,7 +727,6 @@
                                         </div>
                                     </div>
 
-                                    {/* ✨ 雙欄式排列：堂別 & 新人排班規則 */}
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="space-y-2">
                                             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">堂別</label>
@@ -560,7 +758,6 @@
                                         </div>
                                     </div>
 
-                                    {/* 服事資格選擇 */}
                                     <div className="pt-4 border-t border-slate-100 col-span-1 md:col-span-2">
                                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-1">
                                             <ShieldCheck size={16} className="text-indigo-500"/> 服事崗位資格
@@ -590,7 +787,6 @@
                                         </div>
                                     </div>
 
-                                    {/* 請假日期設定 */}
                                     <div className="pt-4 border-t border-slate-100 pb-2">
                                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-3">
                                             <CalendarX size={16} className="text-orange-500"/> 請假 / 不可排班日期
@@ -629,7 +825,6 @@
                                     </div>
                                 </div>
                                 
-                                {/* 底部按鈕區 */}
                                 <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 shrink-0">
                                     <button 
                                         onClick={closeModal} 
