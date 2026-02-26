@@ -37,7 +37,8 @@
         import { createRoot } from 'react-dom/client';
         import { 
             Users, UserPlus, Search, Edit2, Trash2, Save, X, AlertCircle, 
-            CheckCircle2, Clock, CalendarX, ShieldCheck, ChevronRight 
+            CheckCircle2, Clock, CalendarX, ShieldCheck, ChevronRight,
+            Pin, Ban, Heart // 新增 Heart Icon
         } from 'lucide-react';
         import { createClient } from '@supabase/supabase-js';
 
@@ -53,7 +54,8 @@
             availability_status: '穩定服事',
             dual_service_pref: 0, // 0: 無, 1: 同崗位, 2: 不同崗位
             group_id: '',
-            unavailable_dates: [] // array of strings (YYYY-MM-DD)
+            unavailable_dates: [], // array of strings (YYYY-MM-DD)
+            newcomer_rule: '' // 預設為空 (正常)
         };
 
         const SESSION_OPTIONS = ['第一堂', '第二堂', '皆可'];
@@ -137,7 +139,11 @@
                 }
 
                 setEditingMember(member);
-                setFormData({ ...member, unavailable_dates: safeDates });
+                setFormData({ 
+                    ...member, 
+                    unavailable_dates: safeDates,
+                    newcomer_rule: member.newcomer_rule === null ? '' : member.newcomer_rule
+                });
                 
                 // 找出該同工擁有的崗位 ID 與排班狀態
                 const posMap = {};
@@ -161,14 +167,13 @@
 
             // 處理請假日期
             const addUnavailableDate = (e) => {
-                if (e) e.preventDefault(); // 防止按鈕觸發其他預設行為
+                if (e) e.preventDefault();
                 
                 if (!newDateInput) {
                     showMessage('error', '請先選擇一個日期！');
                     return;
                 }
 
-                // 強化防呆：確保 dates 絕對是個陣列，無論資料庫傳回來什麼格式
                 let currentDates = [];
                 if (Array.isArray(formData.unavailable_dates)) {
                     currentDates = formData.unavailable_dates;
@@ -186,7 +191,7 @@
                         ...formData, 
                         unavailable_dates: [...currentDates, newDateInput].sort() 
                     });
-                    setNewDateInput(''); // 成功加入後清空輸入框
+                    setNewDateInput(''); 
                 } else {
                     showMessage('error', '這個日期已經加入囉！');
                     setNewDateInput('');
@@ -208,7 +213,6 @@
                 setFormData({ ...formData, unavailable_dates: currentDates.filter(d => d !== dateToRemove) });
             };
 
-            // 處理崗位切換 (三段式：未選 -> 正常 -> 暫停 -> 未選)
             const togglePosition = (posId) => {
                 setFormPositions(prev => {
                     const currentStatus = prev[posId];
@@ -220,7 +224,7 @@
                 });
             };
 
-            // 3. 儲存至資料庫 (新增或更新)
+            // 3. 儲存至資料庫
             const handleSave = async () => {
                 if (!formData.name || !formData.name.trim()) return showMessage('error', '姓名不可為空！');
                 
@@ -228,9 +232,11 @@
                 try {
                     let memberId = editingMember ? editingMember.id : null;
 
-                    // 處理群組 ID：如果是空白，必須轉成 null，否則會觸發 Foreign Key 錯誤
                     const cleanedGroupId = (formData.group_id || '').trim().toUpperCase();
                     const finalGroupId = cleanedGroupId === '' ? null : cleanedGroupId;
+
+                    // 處理 newcomer_rule，將字串空值轉回 null
+                    const parsedNewcomerRule = formData.newcomer_rule === '' ? null : parseInt(formData.newcomer_rule);
 
                     // 步驟 A: 處理 members 表
                     const memberPayload = {
@@ -239,26 +245,24 @@
                         availability_status: formData.availability_status,
                         dual_service_pref: parseInt(formData.dual_service_pref),
                         group_id: finalGroupId,
-                        unavailable_dates: formData.unavailable_dates && formData.unavailable_dates.length > 0 ? formData.unavailable_dates : null
+                        unavailable_dates: formData.unavailable_dates && formData.unavailable_dates.length > 0 ? formData.unavailable_dates : null,
+                        newcomer_rule: parsedNewcomerRule
                     };
 
                     if (memberId) {
-                        // 更新
                         const { error } = await supabase.from('members').update(memberPayload).eq('id', memberId);
                         if (error) throw error;
                     } else {
-                        // 新增
                         const { data, error } = await supabase.from('members').insert(memberPayload).select();
                         if (error) throw error;
                         
-                        // 防護：如果 RLS 有問題可能拿不到回傳的 data
                         if (!data || data.length === 0) {
                             throw new Error("無法取得新增的資料，請檢查 Supabase 的 Select 權限");
                         }
                         memberId = data[0].id;
                     }
 
-                    // 步驟 B: 處理 member_positions 關聯表 (全刪除後重建)
+                    // 步驟 B: 處理 member_positions 關聯表
                     if (memberId) {
                         const { error: delErr } = await supabase.from('member_positions').delete().eq('member_id', memberId);
                         if (delErr && delErr.code !== 'PGRST116') console.warn('Delete old positions issue:', delErr);
@@ -267,7 +271,7 @@
                         if (posKeys.length > 0) {
                             const insertPosPayload = posKeys.map(pid => ({ 
                                 member_id: memberId, 
-                                position_id: pid, // 已經移除 parseInt()，直接傳入 uuid 字串
+                                position_id: pid,
                                 is_active: formPositions[pid] === 'active'
                             }));
                             const { error: insErr } = await supabase.from('member_positions').insert(insertPosPayload);
@@ -277,7 +281,7 @@
 
                     showMessage('success', editingMember ? '更新成功！' : '新增成功！');
                     closeModal();
-                    loadData(); // 重新整理列表
+                    loadData();
                 } catch (err) {
                     console.error("儲存發生錯誤:", err);
                     showMessage('error', `儲存失敗：${err.message || '請檢查權限設定'}`);
@@ -286,7 +290,6 @@
                 }
             };
 
-            // 4. 刪除同工
             const handleDelete = async (id, name) => {
                 if (!window.confirm(`確定要刪除同工「${name}」嗎？\n注意：這會連帶刪除他所有的排班紀錄！`)) return;
                 
@@ -305,14 +308,27 @@
             };
 
             // 過濾搜尋
-            const filteredMembers = members.filter(m => 
+            let filteredMembers = members.filter(m => 
                 m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                 (m.group_id && m.group_id.toLowerCase().includes(searchTerm.toLowerCase()))
             );
 
+            // 🌟 排序邏輯：群組 -> 置頂規則(1, 3) -> 姓名
+            filteredMembers.sort((a, b) => {
+                const groupA = a.group_id || 'ZZZ_NO_GROUP'; // 讓沒群組的排在最後
+                const groupB = b.group_id || 'ZZZ_NO_GROUP';
+                
+                if (groupA !== groupB) return groupA.localeCompare(groupB);
+                
+                const isTopA = (a.newcomer_rule === 1 || a.newcomer_rule === 3) ? -1 : 1;
+                const isTopB = (b.newcomer_rule === 1 || b.newcomer_rule === 3) ? -1 : 1;
+                if (isTopA !== isTopB) return isTopA - isTopB;
+                
+                return a.name.localeCompare(b.name);
+            });
+
             return (
                 <div className="min-h-screen bg-slate-50 flex flex-col">
-                    {/* 頂部導覽列 */}
                     <nav className="bg-white sticky top-0 z-40 border-b border-slate-200 px-6 py-4 flex justify-between items-center shadow-sm">
                         <div className="flex items-center gap-3">
                             <div className="bg-indigo-600 p-2 rounded-xl text-white">
@@ -327,7 +343,6 @@
                         </button>
                     </nav>
 
-                    {/* 提示訊息 (修正 z-index 為 z-[60] 確保顯示在 Modal 之上) */}
                     {message.text && (
                         <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[60] px-6 py-3 rounded-full font-bold shadow-lg animate-fade-in flex items-center gap-2 ${message.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
                             {message.type === 'success' ? <CheckCircle2 size={18}/> : <AlertCircle size={18}/>}
@@ -336,7 +351,6 @@
                     )}
 
                     <main className="flex-grow p-6 max-w-6xl mx-auto w-full">
-                        {/* 搜尋列 */}
                         <div className="bg-white p-2 rounded-2xl shadow-sm border border-slate-200 mb-6 flex items-center relative">
                             <Search className="absolute left-6 text-slate-400" size={20} />
                             <input 
@@ -348,7 +362,6 @@
                             />
                         </div>
 
-                        {/* 同工列表 (卡片網格) */}
                         {isLoading && members.length === 0 ? (
                             <div className="text-center py-20 text-slate-400 font-bold animate-pulse">載入資料庫中...</div>
                         ) : (
@@ -367,11 +380,11 @@
                                             <div className="flex justify-between items-start mb-4">
                                                 <div className="flex items-center gap-3">
                                                     <div>
-                                                        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                                                        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 flex-wrap">
                                                             {member.name}
                                                             {member.group_id && <span className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded border border-indigo-100">{member.group_id}</span>}
                                                         </h3>
-                                                        <div className="flex items-center gap-1 text-xs font-bold mt-1">
+                                                        <div className="flex items-center flex-wrap gap-1 text-xs font-bold mt-1.5">
                                                             <span className={member.availability_status === '穩定服事' ? 'text-emerald-500' : 'text-orange-500'}>● {member.availability_status}</span>
                                                             <span className="text-slate-300">|</span>
                                                             <span className="text-slate-500">{member.preferred_session}</span>
@@ -387,10 +400,19 @@
                                             <div className="space-y-3">
                                                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                                                     <p className="text-[10px] font-bold text-slate-400 mb-1 flex items-center gap-1"><ShieldCheck size={12}/> 服事資格 ({ownedPosList.length})</p>
-                                                    <div className="flex flex-wrap gap-1">
+                                                    <div className="flex flex-wrap gap-1.5">
                                                         {ownedPosList.length > 0 ? ownedPosList.map(p => (
-                                                            <span key={p.name} className={`text-[10px] font-bold px-2 py-1 rounded-md border ${p.isActive ? 'bg-white border-slate-200 text-slate-600' : 'bg-slate-50 border-slate-200 border-dashed text-slate-400'}`}>
+                                                            <span key={p.name} className={`text-[10px] font-bold px-2 py-1 rounded-md border flex items-center gap-1 ${p.isActive ? 'bg-white border-slate-200 text-slate-600 shadow-sm' : 'bg-slate-50 border-slate-200 border-dashed text-slate-400'}`}>
                                                                 {p.name} {!p.isActive && <span className="text-slate-400">(暫停)</span>}
+                                                                
+                                                                {/* 整合新朋友規則標籤 */}
+                                                                {(p.name.includes('新朋友') && member.newcomer_rule > 0) && (
+                                                                    <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100">
+                                                                        {member.newcomer_rule === 1 && "主責"}
+                                                                        {member.newcomer_rule === 2 && "禁排第二週"}
+                                                                        {member.newcomer_rule === 3 && "主責 + 禁排第二週"}
+                                                                    </span>
+                                                                )}
                                                             </span>
                                                         )) : <span className="text-xs text-slate-400">尚未設定</span>}
                                                     </div>
@@ -418,7 +440,6 @@
                         )}
                     </main>
 
-                    {/* 新增/編輯 Modal */}
                     {isModalOpen && (
                         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in overflow-y-auto">
                             <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden my-auto max-h-[90vh] flex flex-col">
@@ -475,7 +496,25 @@
                                             </select>
                                         </div>
                                         <div className="space-y-2">
-                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">偏好堂別</label>
+                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                                同日二堂服事 <span className="text-slate-400 font-normal">(選填)</span>
+                                            </label>
+                                            <select 
+                                                value={formData.dual_service_pref} 
+                                                onChange={e => setFormData({...formData, dual_service_pref: e.target.value})} 
+                                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all font-semibold text-slate-700 cursor-pointer"
+                                            >
+                                                <option value="0">無</option>
+                                                <option value="1">同崗位</option>
+                                                <option value="2">不同崗位</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {/* ✨ 雙欄式排列：堂別 & 新人排班規則 */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">堂別</label>
                                             <select 
                                                 value={formData.preferred_session} 
                                                 onChange={e => setFormData({...formData, preferred_session: e.target.value})} 
@@ -486,23 +525,26 @@
                                                 ))}
                                             </select>
                                         </div>
-                                    </div>
 
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">同日二堂服事</label>
-                                        <select 
-                                            value={formData.dual_service_pref} 
-                                            onChange={e => setFormData({...formData, dual_service_pref: e.target.value})} 
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all font-semibold text-slate-700 cursor-pointer"
-                                        >
-                                            <option value="0">無</option>
-                                            <option value="1">同崗位</option>
-                                            <option value="2">不同崗位</option>
-                                        </select>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                                新朋友關懷設定 <span className="text-slate-400 font-normal">(選填)</span>
+                                            </label>
+                                            <select 
+                                                value={formData.newcomer_rule === null ? '' : formData.newcomer_rule} 
+                                                onChange={e => setFormData({...formData, newcomer_rule: e.target.value})} 
+                                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all font-semibold text-slate-700 cursor-pointer"
+                                            >
+                                                <option value="">預設(正常排班)</option>
+                                                <option value="1">主責</option>
+                                                <option value="2">禁排第二週</option>
+                                                <option value="3">主責 ＋ 禁排第二週</option>
+                                            </select>
+                                        </div>
                                     </div>
 
                                     {/* 服事資格選擇 */}
-                                    <div className="pt-4 border-t border-slate-100">
+                                    <div className="pt-4 border-t border-slate-100 col-span-1 md:col-span-2">
                                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-1">
                                             <ShieldCheck size={16} className="text-indigo-500"/> 服事崗位資格
                                         </label>
@@ -512,16 +554,9 @@
                                             {positions.map(pos => {
                                                 const status = formPositions[pos.id];
                                                 
-                                                // 無資格 (未選取) - 淺灰底色、淺灰字
                                                 let btnStyle = 'bg-slate-100 border-slate-100 text-slate-400 hover:bg-slate-200'; 
-                                                
-                                                if (status === 'active') {
-                                                    // 有資格且正常
-                                                    btnStyle = 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm';
-                                                } else if (status === 'inactive') {
-                                                    // 有資格但暫停
-                                                    btnStyle = 'bg-white border-slate-400 text-slate-600 border-dashed shadow-sm';
-                                                }
+                                                if (status === 'active') btnStyle = 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm';
+                                                else if (status === 'inactive') btnStyle = 'bg-white border-slate-400 text-slate-600 border-dashed shadow-sm';
                                                 
                                                 return (
                                                     <button
