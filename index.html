@@ -165,7 +165,7 @@
                 const targetQ = getNextQuarter(viewQuarter);
                 setConfirmAction({
                     title: '建立同工資料',
-                    message: `自動複製【${viewQuarter}】的同工資料，建立為【${targetQ}】的資料`,
+                    message: `完整複製【${viewQuarter}】同工資料至【${targetQ}】`,
                     confirmText: '複製',
                     onConfirm: () => executeCreateNextQuarter(viewQuarter, targetQ)
                 });
@@ -317,6 +317,23 @@
                 setEditingMember(null);
                 setFormData({ ...DEFAULT_MEMBER });
                 setNewDateInput('');
+            };
+
+            // 檢查是否為週日
+            const handleDateChange = (e) => {
+                const selectedDate = e.target.value;
+                if (!selectedDate) {
+                    setNewDateInput('');
+                    return;
+                }
+                const dateObj = new Date(selectedDate);
+                // getDay() 回傳 0 代表週日
+                if (dateObj.getDay() !== 0) {
+                    showMessage('error', '只能選擇週日！');
+                    setNewDateInput(''); // 清空錯誤的選擇
+                } else {
+                    setNewDateInput(selectedDate);
+                }
             };
 
             const addUnavailableDate = (e) => {
@@ -638,7 +655,7 @@
                                                 
                                                 {(settings.unavailable_dates && settings.unavailable_dates.length > 0) && (
                                                     <div className="bg-orange-50/50 p-3 rounded-xl border border-orange-100">
-                                                        <p className="text-[10px] font-bold text-orange-400 mb-1 flex items-center gap-1"><CalendarX size={12}/> 請假日期 ({settings.unavailable_dates.length})</p>
+                                                        <p className="text-[10px] font-bold text-orange-400 mb-1 flex items-center gap-1"><CalendarX size={12}/> 不可排班日 ({settings.unavailable_dates.length})</p>
                                                         <div className="flex flex-wrap gap-1">
                                                             {settings.unavailable_dates.map(d => (
                                                                 <span key={d} className="text-[10px] font-bold bg-white text-orange-600 px-1.5 py-0.5 rounded border border-orange-200">{d}</span>
@@ -789,13 +806,13 @@
 
                                     <div className="pt-4 border-t border-slate-100 pb-2">
                                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 mb-3">
-                                            <CalendarX size={16} className="text-orange-500"/> 請假 / 不可排班日期
+                                            <CalendarX size={16} className="text-orange-500"/> 不可排班日
                                         </label>
                                         <div className="flex gap-2 mb-3">
                                             <input 
                                                 type="date" 
                                                 value={newDateInput} 
-                                                onChange={e => setNewDateInput(e.target.value)} 
+                                                onChange={handleDateChange} 
                                                 className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100 transition-all font-semibold text-slate-700"
                                             />
                                             <button 
@@ -808,7 +825,7 @@
                                         </div>
                                         
                                         <div className="flex flex-wrap gap-2">
-                                            {(!formData.unavailable_dates || formData.unavailable_dates.length === 0) && <span className="text-sm text-slate-400">目前無請假紀錄。</span>}
+                                            {(!formData.unavailable_dates || formData.unavailable_dates.length === 0) && <span className="text-sm text-slate-400">目前無不可排班紀錄。</span>}
                                             {Array.isArray(formData.unavailable_dates) && formData.unavailable_dates.map(date => (
                                                 <div key={date} className="bg-white border border-orange-200 text-orange-600 pl-3 pr-1 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm">
                                                     {date}
