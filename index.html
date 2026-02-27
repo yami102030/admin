@@ -52,7 +52,7 @@
             name: '',
             preferred_session: '第一堂',
             availability_status: '穩定服事',
-            dual_service_pref: 0, 
+            dual_service_pref: 0, // 0: 無, 1: 二堂同崗, 2: 二堂異崗
             group_id: '',
             unavailable_dates: [], 
             newcomer_rule: '' 
@@ -618,6 +618,8 @@
                                                     <div>
                                                         <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 flex-wrap">
                                                             {member.name}
+                                                            {settings.dual_service_pref === 1 && <span className="text-[10px] bg-purple-50 text-purple-600 px-2 py-0.5 rounded border border-purple-100">二堂同崗</span>}
+                                                            {settings.dual_service_pref === 2 && <span className="text-[10px] bg-purple-50 text-purple-600 px-2 py-0.5 rounded border border-purple-100">二堂異崗</span>}
                                                             {member.group_id && <span className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded border border-indigo-100">{member.group_id}</span>}
                                                         </h3>
                                                         <div className="flex items-center flex-wrap gap-1 text-xs font-bold mt-1.5">
@@ -738,8 +740,8 @@
                                                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all font-semibold text-slate-700 cursor-pointer"
                                             >
                                                 <option value="0">無</option>
-                                                <option value="1">同崗位</option>
-                                                <option value="2">不同崗位</option>
+                                                <option value="1">二堂同崗</option>
+                                                <option value="2">二堂異崗</option>
                                             </select>
                                         </div>
                                     </div>
