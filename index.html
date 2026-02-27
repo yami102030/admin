@@ -185,33 +185,53 @@
                         throw new Error(`【${sourceQ}】目前沒有任何資料可供複製！`);
                     }
 
-                    // 複製前先清空目標季度，避免衝突
-                    await supabase.from('member_quarter_settings').delete().eq('quarter', targetQ);
-                    await supabase.from('member_positions').delete().eq('quarter', targetQ);
+                    // 【關鍵修正】：加入自動去重機制 (過濾來源的髒資料)
+                    // 確保同一個 member_id 只有一筆設定，避免寫入時違反 Unique Constraint
+                    const uniqueSettingsMap = new Map();
+                    if (oldSettings) {
+                        oldSettings.forEach(s => uniqueSettingsMap.set(s.member_id, s));
+                    }
+                    const filteredOldSettings = Array.from(uniqueSettingsMap.values());
 
-                    if (oldSettings && oldSettings.length > 0) {
-                        const newSettings = oldSettings.map(s => ({
+                    // 確保同一個 member_id + position_id 只有一筆設定
+                    const uniquePosMap = new Map();
+                    if (oldPos) {
+                        oldPos.forEach(p => uniquePosMap.set(`${p.member_id}_${p.position_id}`, p));
+                    }
+                    const filteredOldPos = Array.from(uniquePosMap.values());
+
+                    // 複製前先嘗試清空目標季度，並捕捉可能的錯誤 (避免默默失敗)
+                    const { error: delErrSettings } = await supabase.from('member_quarter_settings').delete().eq('quarter', targetQ);
+                    const { error: delErrPos } = await supabase.from('member_positions').delete().eq('quarter', targetQ);
+                    
+                    if (delErrSettings) console.warn("清空目標季度設定警告:", delErrSettings);
+                    if (delErrPos) console.warn("清空目標季度資格警告:", delErrPos);
+
+                    // 🌟 核心修正 1：將 insert 改為 upsert，並加上 onConflict 條件，徹底避開 duplicate key 報錯
+                    if (filteredOldSettings.length > 0) {
+                        const newSettings = filteredOldSettings.map(s => ({
                             member_id: s.member_id,
                             preferred_session: s.preferred_session,
-                            availability_status: s.availability_status,
+                            availability_status: s.availability_status === '安息季' ? '穩定服事' : s.availability_status,
                             dual_service_pref: s.dual_service_pref,
                             newcomer_rule: s.newcomer_rule,
                             unavailable_dates: s.unavailable_dates,
                             quarter: targetQ
                         }));
-                        const { error: insErr1 } = await supabase.from('member_quarter_settings').insert(newSettings);
-                        if (insErr1) throw insErr1;
+                        const { error: insErr1 } = await supabase.from('member_quarter_settings').upsert(newSettings, { onConflict: 'member_id, quarter' });
+                        if (insErr1) throw new Error("寫入設定失敗: " + insErr1.message);
                     }
 
-                    if (oldPos && oldPos.length > 0) {
-                        const newPos = oldPos.map(p => ({
+                    // 🌟 核心修正 2：服事資格也改用 upsert，直接覆蓋殘留的舊資料
+                    if (filteredOldPos.length > 0) {
+                        const newPos = filteredOldPos.map(p => ({
                             member_id: p.member_id,
                             position_id: p.position_id,
                             is_active: p.is_active,
                             quarter: targetQ
                         }));
-                        const { error: insErr2 } = await supabase.from('member_positions').insert(newPos);
-                        if (insErr2) throw insErr2;
+                        const { error: insErr2 } = await supabase.from('member_positions').upsert(newPos, { onConflict: 'member_id, position_id, quarter' });
+                        if (insErr2) throw new Error("寫入資格失敗: " + insErr2.message);
                     }
                     
                     showMessage('success', `已成功建立 ${targetQ} 資料！`);
@@ -252,14 +272,24 @@
                 if (!quarterToDelete) return;
                 setIsLoading(true);
                 try {
-                    await supabase.from('member_quarter_settings').delete().eq('quarter', quarterToDelete);
-                    await supabase.from('member_positions').delete().eq('quarter', quarterToDelete);
+                    // 🌟 修正：加上 .select()，讓 Supabase 回傳實際被刪除的資料
+                    // 如果 Supabase 權限沒開，它不會報錯，但會回傳空陣列 (length === 0)
+                    const { data: delSettings, error: err1 } = await supabase.from('member_quarter_settings').delete().eq('quarter', quarterToDelete).select();
+                    const { data: delPos, error: err2 } = await supabase.from('member_positions').delete().eq('quarter', quarterToDelete).select();
+                    
+                    if (err1) throw err1;
+                    if (err2) throw err2;
+                    
+                    // 防呆檢查：如果選單上有這個季度，代表絕對有資料。若刪除後回傳 0 筆，絕對是權限被擋了！
+                    if ((!delSettings || delSettings.length === 0) && (!delPos || delPos.length === 0)) {
+                        throw new Error("未能刪除資料！請確認 Supabase 後台已關閉 RLS 或已開啟 Delete 權限。");
+                    }
                     
                     showMessage('success', `已徹底刪除 ${quarterToDelete} 的所有資料！`);
                     setIsDeleteQuarterModalOpen(false);
                     
                     if (viewQuarter === quarterToDelete) {
-                        loadData(); // 如果刪除的是當前畫面，重新載入讓畫面清空
+                        loadData(); 
                     }
                 } catch (err) {
                     showMessage('error', '刪除失敗: ' + err.message);
@@ -435,11 +465,18 @@
                         setConfirmAction(null);
                         setIsLoading(true);
                         try {
-                            await supabase.from('members').delete().eq('id', id);
+                            // 🌟 修正：這裡也加上 .select() 來檢查單一同工是否真的被刪除了
+                            const { data, error } = await supabase.from('members').delete().eq('id', id).select();
+                            if (error) throw error;
+                            
+                            if (!data || data.length === 0) {
+                                throw new Error("無權限刪除！請確認 Supabase 後台已關閉 members 的 RLS。");
+                            }
+                            
                             showMessage('success', '已刪除同工資料。');
                             loadData();
                         } catch (err) {
-                            showMessage('error', '刪除失敗，請檢查權限。');
+                            showMessage('error', '刪除失敗: ' + err.message);
                         } finally {
                             setIsLoading(false);
                         }
