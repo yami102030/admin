@@ -165,8 +165,8 @@
                 const targetQ = getNextQuarter(viewQuarter);
                 setConfirmAction({
                     title: '建立同工資料',
-                    message: `完整新增【${viewQuarter}】同工資料至【${targetQ}】`,
-                    confirmText: '新增',
+                    message: `完整複製【${viewQuarter}】同工資料至【${targetQ}】`,
+                    confirmText: '複製',
                     onConfirm: () => executeCreateNextQuarter(viewQuarter, targetQ)
                 });
             };
@@ -526,10 +526,11 @@
                             {/* 季度檢視選單 */}
                             <div className="flex items-center bg-slate-50 rounded-xl p-1.5 border border-slate-200">
                                 <Clock size={16} className="ml-2 text-slate-400"/>
+                                <span className="ml-1.5 text-sm font-bold text-slate-600">同工列表</span>
                                 <select 
                                     value={viewQuarter} 
                                     onChange={(e) => setViewQuarter(e.target.value)}
-                                    className="bg-transparent border-none px-3 py-1 font-bold text-indigo-600 outline-none cursor-pointer"
+                                    className="bg-transparent border-none px-2 py-1 font-bold text-indigo-600 outline-none cursor-pointer"
                                     title="切換檢視季度"
                                 >
                                     {quarterOptions.map(q => <option key={q} value={q}>{q}</option>)}
@@ -720,7 +721,7 @@
                                 <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
                                     <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
                                         {editingMember ? <Edit2 size={20} className="text-indigo-600"/> : <UserPlus size={20} className="text-indigo-600"/>}
-                                        {editingMember ? '編輯同工資料' : '新增同工'} <span className="text-sm font-bold text-slate-400 ml-2">班別({viewQuarter})</span>
+                                        {editingMember ? '編輯同工資料' : '新增同工'} <span className="text-sm font-bold text-slate-400 ml-2">同工列表({viewQuarter})</span>
                                     </h2>
                                     <button onClick={closeModal} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors"><X size={20}/></button>
                                 </div>
