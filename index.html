@@ -67,7 +67,7 @@
             const currentYear = d.getFullYear();
             const currentQ = Math.floor(d.getMonth() / 3) + 1;
             const quarters = [];
-            // 修正：產生「本季」與「下二季」(共3季)
+            // 產生「本季」與「下二季」(共3季)
             for (let offset = 0; offset <= 2; offset++) {
                 let q = currentQ + offset;
                 let y = currentYear;
@@ -142,7 +142,7 @@
                     // 動態更新季度選單
                     if (allSettingsQs) {
                         const dbQuarters = allSettingsQs.map(d => d.quarter);
-                        // 修正：移除 reverse() 讓選單照時間先後(本季 -> 下季 -> 下二季)排序
+                        // 移除 reverse() 讓選單照時間先後(本季 -> 下季 -> 下二季)排序
                         const combinedQs = [...new Set([...generateBaseQuarters(), ...dbQuarters, viewQuarter])].sort();
                         setQuarterOptions(combinedQs);
                     }
@@ -160,13 +160,13 @@
                 setTimeout(() => setMessage({ type: '', text: '' }), 4000);
             };
 
-            // 🌟 1. 建立下季同工資料 (複製目前 -> 下一季)
+            // 🌟 1. 建立下季同工資料 (新增目前 -> 下一季)
             const triggerCreateNextQuarter = () => {
                 const targetQ = getNextQuarter(viewQuarter);
                 setConfirmAction({
                     title: '建立同工資料',
-                    message: `完整複製【${viewQuarter}】同工資料至【${targetQ}】`,
-                    confirmText: '複製',
+                    message: `完整新增【${viewQuarter}】同工資料至【${targetQ}】`,
+                    confirmText: '新增',
                     onConfirm: () => executeCreateNextQuarter(viewQuarter, targetQ)
                 });
             };
@@ -182,10 +182,10 @@
                     if (err2) throw err2;
 
                     if ((!oldSettings || oldSettings.length === 0) && (!oldPos || oldPos.length === 0)) {
-                        throw new Error(`【${sourceQ}】目前沒有任何資料可供複製！`);
+                        throw new Error(`【${sourceQ}】目前沒有任何資料可供新增！`);
                     }
 
-                    // 【關鍵修正】：加入自動去重機制 (過濾來源的髒資料)
+                    // 加入自動去重機制 (過濾來源的髒資料)
                     // 確保同一個 member_id 只有一筆設定，避免寫入時違反 Unique Constraint
                     const uniqueSettingsMap = new Map();
                     if (oldSettings) {
@@ -200,14 +200,14 @@
                     }
                     const filteredOldPos = Array.from(uniquePosMap.values());
 
-                    // 複製前先嘗試清空目標季度，並捕捉可能的錯誤 (避免默默失敗)
+                    // 新增前先嘗試清空目標季度，並捕捉可能的錯誤 (避免默默失敗)
                     const { error: delErrSettings } = await supabase.from('member_quarter_settings').delete().eq('quarter', targetQ);
                     const { error: delErrPos } = await supabase.from('member_positions').delete().eq('quarter', targetQ);
                     
                     if (delErrSettings) console.warn("清空目標季度設定警告:", delErrSettings);
                     if (delErrPos) console.warn("清空目標季度資格警告:", delErrPos);
 
-                    // 🌟 核心修正 1：將 insert 改為 upsert，並加上 onConflict 條件，徹底避開 duplicate key 報錯
+                    // 將 insert 改為 upsert，並加上 onConflict 條件，徹底避開 duplicate key 報錯
                     if (filteredOldSettings.length > 0) {
                         const newSettings = filteredOldSettings.map(s => ({
                             member_id: s.member_id,
@@ -222,7 +222,7 @@
                         if (insErr1) throw new Error("寫入設定失敗: " + insErr1.message);
                     }
 
-                    // 🌟 核心修正 2：服事資格也改用 upsert，直接覆蓋殘留的舊資料
+                    // 服事資格也改用 upsert，直接覆蓋殘留的舊資料
                     if (filteredOldPos.length > 0) {
                         const newPos = filteredOldPos.map(p => ({
                             member_id: p.member_id,
@@ -272,7 +272,7 @@
                 if (!quarterToDelete) return;
                 setIsLoading(true);
                 try {
-                    // 🌟 修正：加上 .select()，讓 Supabase 回傳實際被刪除的資料
+                    // 加上 .select()，讓 Supabase 回傳實際被刪除的資料
                     // 如果 Supabase 權限沒開，它不會報錯，但會回傳空陣列 (length === 0)
                     const { data: delSettings, error: err1 } = await supabase.from('member_quarter_settings').delete().eq('quarter', quarterToDelete).select();
                     const { data: delPos, error: err2 } = await supabase.from('member_positions').delete().eq('quarter', quarterToDelete).select();
@@ -465,7 +465,7 @@
                         setConfirmAction(null);
                         setIsLoading(true);
                         try {
-                            // 🌟 修正：這裡也加上 .select() 來檢查單一同工是否真的被刪除了
+                            // 加上 .select() 來檢查單一同工是否真的被刪除了
                             const { data, error } = await supabase.from('members').delete().eq('id', id).select();
                             if (error) throw error;
                             
@@ -537,8 +537,8 @@
                             </div>
                             
                             {/* 建立下季按鈕 */}
-                            <button onClick={triggerCreateNextQuarter} className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 shadow-sm transition-all active:scale-95" title="以目前季度為基礎，複製建立下一季資料">
-                                <Copy size={16} /> <span className="hidden md:inline">複製</span>
+                            <button onClick={triggerCreateNextQuarter} className="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-3 rounded-xl flex items-center gap-1.5 shadow-sm transition-all active:scale-95" title="以目前季度為基礎，新增建立下一季資料">
+                                <Copy size={16} /> <span className="hidden md:inline">新增</span>
                             </button>
 
                             {/* 刪除季度按鈕 */}
@@ -720,7 +720,7 @@
                                 <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
                                     <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
                                         {editingMember ? <Edit2 size={20} className="text-indigo-600"/> : <UserPlus size={20} className="text-indigo-600"/>}
-                                        {editingMember ? '編輯同工資料' : '新增同工'} <span className="text-sm font-bold text-slate-400 ml-2">({viewQuarter})</span>
+                                        {editingMember ? '編輯同工資料' : '新增同工'} <span className="text-sm font-bold text-slate-400 ml-2">班別({viewQuarter})</span>
                                     </h2>
                                     <button onClick={closeModal} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors"><X size={20}/></button>
                                 </div>
